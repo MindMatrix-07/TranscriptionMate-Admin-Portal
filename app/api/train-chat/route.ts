@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import {
   appendTrainingNote,
+  listAuditRuns,
   listFeedback,
+  listProviderSettings,
   listSiteProfiles,
   listTrainingNotes,
 } from "@/lib/training-store";
@@ -66,10 +68,12 @@ export async function POST(request: Request) {
       content: message,
     });
 
-    const [siteProfiles, feedback, notes] = await Promise.all([
+    const [siteProfiles, feedback, notes, providers, auditRuns] = await Promise.all([
       listSiteProfiles(),
       listFeedback(),
       listTrainingNotes(),
+      listProviderSettings(),
+      listAuditRuns(),
     ]);
 
     const apiKey = process.env.OPENAI_API_KEY;
@@ -89,14 +93,16 @@ export async function POST(request: Request) {
             {
               role: "system",
               content:
-                "You are the training assistant for a lyrics source-detection system. Help the admin refine site fingerprints, search patterns, and moderation logic. Be practical and concise. Suggest what to store as site notes or fingerprints when useful.",
+                "You are the training assistant for a lyrics source-detection system. Help the admin refine site fingerprints, provider routing strategy, search patterns, and moderation logic. Be practical and concise. Suggest what to store as site notes, fingerprints, or provider settings when useful.",
             },
             {
               role: "user",
               content: JSON.stringify({
+                auditRuns: auditRuns.slice(0, 25),
                 feedback: feedback.slice(0, 20),
                 message,
                 notes: notes.slice(-20),
+                providers,
                 siteProfiles: siteProfiles.slice(0, 30),
               }),
             },

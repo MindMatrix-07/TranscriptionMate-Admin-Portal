@@ -18,21 +18,75 @@ export type TrainingNote = SharedItem & {
 };
 
 export type AuditFeedback = SharedItem & {
+  auditRunId?: string | null;
   auditSummary: string;
   inputExcerpt: string;
   likelySourceDomain: string | null;
   likelySourceName: string | null;
+  providerId?: string | null;
   spamProbability: number;
   verdict: "yes" | "no";
+};
+
+export type ProviderMode = "always" | "low-confidence-only";
+
+export type ProviderSetting = SharedItem & {
+  allowFallback: boolean;
+  dailySoftLimit: number;
+  enabled: boolean;
+  mode: ProviderMode;
+  name: string;
+  priority: number;
+  providerId: string;
+  timeoutMs: number;
+  updatedAt: string;
+};
+
+export type AuditRun = SharedItem & {
+  fallbackChain: string[];
+  inputHash: string;
+  likelySourceDomain: string | null;
+  likelySourceName: string | null;
+  notes: string;
+  providerId: string | null;
+  queries: string[];
+  searchResultCount: number;
+  spamProbability: number;
+  status: "success" | "fallback" | "heuristic" | "error";
+  webEvidence: Array<{
+    providerId: string;
+    score?: number | null;
+    snippet: string;
+    title: string;
+    url: string;
+  }>;
 };
 
 const sharedMemoryStore = new Map<string, string>();
 
 const storageKeys = {
+  auditRuns: "trainer:audit-runs",
   feedback: "trainer:feedback",
+  providers: "trainer:providers",
   siteProfiles: "trainer:site-profiles",
   trainingNotes: "trainer:notes",
 } as const;
+
+const defaultProviders: ProviderSetting[] = [
+  {
+    allowFallback: true,
+    createdAt: new Date(0).toISOString(),
+    dailySoftLimit: 250,
+    enabled: true,
+    id: "provider-default-tavily",
+    mode: "always",
+    name: "Tavily",
+    priority: 1,
+    providerId: "tavily",
+    timeoutMs: 8000,
+    updatedAt: new Date(0).toISOString(),
+  },
+];
 
 function getRedisConfig() {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -159,4 +213,47 @@ export async function appendTrainingNote(
 
 export async function listFeedback() {
   return readList<AuditFeedback>(storageKeys.feedback);
+}
+
+export async function listProviderSettings() {
+  const stored = await readList<ProviderSetting>(storageKeys.providers);
+  return stored.length > 0
+    ? stored.sort((left, right) => left.priority - right.priority)
+    : defaultProviders;
+}
+
+export async function upsertProviderSetting(
+  provider: Omit<ProviderSetting, "createdAt" | "id" | "updatedAt"> & {
+    id?: string;
+  },
+) {
+  const items = await listProviderSettings();
+  const now = new Date().toISOString();
+  const existing =
+    items.find((item) => item.id === provider.id) ??
+    items.find((item) => item.providerId === provider.providerId);
+
+  const nextProvider: ProviderSetting = existing
+    ? {
+        ...existing,
+        ...provider,
+        updatedAt: now,
+      }
+    : {
+        ...provider,
+        createdAt: now,
+        id: createId("provider"),
+        updatedAt: now,
+      };
+
+  const nextItems = existing
+    ? items.map((item) => (item.id === existing.id ? nextProvider : item))
+    : [...items, nextProvider];
+
+  await writeList(storageKeys.providers, nextItems);
+  return nextProvider;
+}
+
+export async function listAuditRuns() {
+  return readList<AuditRun>(storageKeys.auditRuns);
 }
