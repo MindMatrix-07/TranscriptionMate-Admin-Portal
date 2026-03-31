@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { collectTrainerWebEvidence } from "@/lib/trainer-search";
 import {
   appendTrainingNote,
   listAuditRuns,
@@ -19,6 +20,14 @@ const defaultGeminiModel =
 const geminiApiBaseUrl =
   "https://generativelanguage.googleapis.com/v1beta/models";
 const openAiApiUrl = "https://api.openai.com/v1/responses";
+
+type TrainerMeta = {
+  liveAiEnabled: boolean;
+  liveWebEnabled: boolean;
+  modelUsed: "gemini" | "openai" | null;
+  webEvidenceCount: number;
+  webProviderUsed: string | null;
+};
 
 function extractOpenAiText(payload: unknown) {
   if (
@@ -111,14 +120,14 @@ async function requestOpenAiReply(promptPayload: object) {
         {
           role: "system",
           content:
-            "You are the training assistant for a lyrics source-detection system. Help the admin refine site fingerprints, provider routing strategy, search patterns, and moderation logic. Be practical and concise. Suggest what to store as site notes, fingerprints, or provider settings when useful.",
+            "You are the training assistant for a lyrics source-detection system. Help the admin refine site fingerprints, provider routing strategy, search patterns, and moderation logic. Use the fetched web evidence directly, cite concrete site clues when present, and be practical and concise. Suggest what to store as site notes, fingerprints, or provider settings when useful.",
         },
         {
           role: "user",
           content: JSON.stringify(promptPayload),
         },
       ],
-      max_output_tokens: 500,
+      max_output_tokens: 700,
     }),
   });
 
@@ -158,15 +167,10 @@ async function requestGeminiReply(promptPayload: object) {
         systemInstruction: {
           parts: [
             {
-              text: "You are the training assistant for a lyrics source-detection system. Help the admin refine site fingerprints, provider routing strategy, search patterns, and moderation logic. Use Google Search grounding when it helps. Be practical and concise. Suggest what to store as site notes, fingerprints, or provider settings when useful.",
+              text: "You are the training assistant for a lyrics source-detection system. Help the admin refine site fingerprints, provider routing strategy, search patterns, and moderation logic. Use the fetched web evidence directly, cite concrete site clues when present, and be practical and concise. Suggest what to store as site notes, fingerprints, or provider settings when useful.",
             },
           ],
         },
-        tools: [
-          {
-            google_search: {},
-          },
-        ],
       }),
     },
   );
@@ -203,6 +207,15 @@ export async function POST(request: Request) {
       listProviderSettings(),
       listAuditRuns(),
     ]);
+    const liveAiEnabled = Boolean(
+      process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY,
+    );
+    const trainerWebSearch = await collectTrainerWebEvidence(
+      message,
+      providers,
+      siteProfiles,
+    );
+    const liveWebEnabled = trainerWebSearch.queries.length > 0;
     const promptPayload = {
       auditRuns: auditRuns.slice(0, 25),
       feedback: feedback.slice(0, 20),
@@ -210,20 +223,47 @@ export async function POST(request: Request) {
       notes: notes.slice(-20),
       providers,
       siteProfiles: siteProfiles.slice(0, 30),
+      trainerWebEvidence: trainerWebSearch.evidence,
+      trainerWebNotes: trainerWebSearch.notes,
+      trainerWebQueries: trainerWebSearch.queries,
+    };
+    const meta: TrainerMeta = {
+      liveAiEnabled,
+      liveWebEnabled,
+      modelUsed: null,
+      webEvidenceCount: trainerWebSearch.evidence.length,
+      webProviderUsed: trainerWebSearch.providerId,
     };
 
     let reply =
-      "Note saved. Configure GEMINI_API_KEY or OPENAI_API_KEY to enable live trainer chat replies. The saved admin note will still be used by the main-site audit prompt.";
+      "Note saved, but live trainer mode needs both an AI key and at least one enabled web-search provider key.";
 
-    try {
+    if (liveAiEnabled && liveWebEnabled) {
+      try {
+        const geminiReply = await requestGeminiReply(promptPayload);
+
+        if (geminiReply) {
+          reply = geminiReply;
+          meta.modelUsed = "gemini";
+        } else {
+          const openAiReply = await requestOpenAiReply(promptPayload);
+
+          if (openAiReply) {
+            reply = openAiReply;
+            meta.modelUsed = "openai";
+          }
+        }
+      } catch (error) {
+        const failureMessage =
+          error instanceof Error ? error.message : "Unknown trainer chat failure";
+        reply = `Note saved, but the live trainer reply failed: ${failureMessage}`;
+      }
+    } else if (liveAiEnabled) {
       reply =
-        (await requestGeminiReply(promptPayload)) ??
-        (await requestOpenAiReply(promptPayload)) ??
-        reply;
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown trainer chat failure";
-      reply = `Note saved, but the live trainer reply failed: ${message}`;
+        "Note saved, but live trainer mode is waiting for an enabled web-search provider with a valid API key.";
+    } else if (liveWebEnabled) {
+      reply =
+        "Note saved, but live trainer mode is waiting for an AI model key like GEMINI_API_KEY or OPENAI_API_KEY.";
     }
 
     await appendTrainingNote({
@@ -234,6 +274,7 @@ export async function POST(request: Request) {
     const updatedNotes = await listTrainingNotes();
 
     return NextResponse.json({
+      meta,
       notes: updatedNotes,
       reply,
     });

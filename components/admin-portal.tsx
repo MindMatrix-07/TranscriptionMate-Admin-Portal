@@ -88,6 +88,14 @@ type AuditRun = {
 
 type Theme = "light" | "dark";
 
+type TrainerMeta = {
+  liveAiEnabled: boolean;
+  liveWebEnabled: boolean;
+  modelUsed: "gemini" | "openai" | null;
+  webEvidenceCount: number;
+  webProviderUsed: string | null;
+};
+
 const emptySiteForm = {
   domain: "",
   fingerprints: "",
@@ -144,6 +152,7 @@ export function AdminPortal() {
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [deletingSiteId, setDeletingSiteId] = useState<string | null>(null);
+  const [trainerMeta, setTrainerMeta] = useState<TrainerMeta | null>(null);
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -263,8 +272,12 @@ export function AdminPortal() {
         throw new Error("Chat failed");
       }
 
-      const payload = (await response.json()) as { notes: TrainingNote[] };
+      const payload = (await response.json()) as {
+        meta?: TrainerMeta;
+        notes: TrainingNote[];
+      };
       setNotes(payload.notes ?? []);
+      setTrainerMeta(payload.meta ?? null);
       setChatInput("");
     } finally {
       setIsSendingChat(false);
@@ -497,6 +510,34 @@ export function AdminPortal() {
                   )}
                   {isSendingChat ? "Saving..." : "Send Training Note"}
                 </button>
+                {trainerMeta ? (
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span
+                      className={`rounded-full px-3 py-1 ${
+                        trainerMeta.liveAiEnabled
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-rose-500/15 text-rose-400"
+                      }`}
+                    >
+                      {trainerMeta.liveAiEnabled
+                        ? `AI: ${trainerMeta.modelUsed ?? "configured"}`
+                        : "AI: missing"}
+                    </span>
+                    <span
+                      className={`rounded-full px-3 py-1 ${
+                        trainerMeta.liveWebEnabled
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-rose-500/15 text-rose-400"
+                      }`}
+                    >
+                      {trainerMeta.liveWebEnabled
+                        ? `Web: ${formatProviderName(
+                            trainerMeta.webProviderUsed,
+                          )} (${trainerMeta.webEvidenceCount})`
+                        : "Web: missing"}
+                    </span>
+                  </div>
+                ) : null}
               </form>
             </div>
 
