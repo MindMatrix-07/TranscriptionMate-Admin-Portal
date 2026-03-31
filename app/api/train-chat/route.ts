@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAdminApiAuth } from "@/lib/admin-auth";
 import { collectTrainerWebEvidence } from "@/lib/trainer-search";
 import {
   appendTrainingLesson,
@@ -251,6 +252,12 @@ async function requestGeminiReply(promptPayload: object) {
 }
 
 export async function POST(request: Request) {
+  const unauthorizedResponse = requireAdminApiAuth(request);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
   try {
     const body = (await request.json()) as { message?: string };
     const message = body.message?.trim() ?? "";

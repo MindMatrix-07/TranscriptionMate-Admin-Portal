@@ -1,3 +1,4 @@
+import { getSearchableLines } from "@/lib/training-audit";
 import type { ProviderSetting, SiteProfile } from "@/lib/training-store";
 
 export type TrainerWebEvidence = {
@@ -11,6 +12,7 @@ export type TrainerWebEvidence = {
 export type TrainerSearchResult = {
   evidence: TrainerWebEvidence[];
   notes: string;
+  providerChain: string[];
   providerId: string | null;
   queries: string[];
 };
@@ -49,6 +51,30 @@ function buildQueries(message: string, siteProfiles: SiteProfile[]) {
 
   for (const domain of domains) {
     queries.push(`site:${domain} ${compactMessage}`);
+  }
+
+  return [...new Set(queries)].filter(Boolean).slice(0, 3);
+}
+
+function buildLyricQueries(rawLyrics: string, siteProfiles: SiteProfile[]) {
+  const lines = getSearchableLines(rawLyrics);
+  const primaryLine = lines[0];
+  const secondaryLine = lines[1];
+  const domains = getMatchingDomains(rawLyrics, siteProfiles).slice(0, 2);
+  const queries: string[] = [];
+
+  if (primaryLine && domains[0]) {
+    queries.push(`site:${domains[0]} "${primaryLine}"`);
+  }
+
+  if (primaryLine && secondaryLine) {
+    queries.push(`"${primaryLine}" "${secondaryLine}" lyrics`);
+  } else if (primaryLine) {
+    queries.push(`"${primaryLine}" lyrics`);
+  }
+
+  if (primaryLine && domains[1]) {
+    queries.push(`site:${domains[1]} "${primaryLine}"`);
   }
 
   return [...new Set(queries)].filter(Boolean).slice(0, 3);
@@ -121,6 +147,7 @@ async function searchWithTavily(
       evidence.length > 0
         ? `Tavily returned ${evidence.length} result${evidence.length === 1 ? "" : "s"} for the trainer prompt.`
         : "Tavily searched the web, but did not return matching evidence.",
+    providerChain: evidence.length > 0 ? [setting.providerId] : [],
     providerId: evidence.length > 0 ? setting.providerId : null,
     queries: attemptedQueries,
   };
@@ -277,6 +304,7 @@ async function searchWithGemini(
     return {
       evidence: [],
       notes: "Gemini Search returned no grounded candidate for the trainer prompt.",
+      providerChain: [],
       providerId: null,
       queries,
     };
@@ -290,30 +318,35 @@ async function searchWithGemini(
       evidence.length > 0
         ? `Gemini Search grounded the trainer prompt against ${evidence.length} Google-backed result${evidence.length === 1 ? "" : "s"}.`
         : "Gemini Search ran for the trainer prompt, but it did not return grounded evidence.",
+    providerChain: evidence.length > 0 ? [setting.providerId] : [],
     providerId: evidence.length > 0 ? setting.providerId : null,
     queries:
       candidate.groundingMetadata?.webSearchQueries?.filter(Boolean) ?? queries,
   };
 }
 
-export async function collectTrainerWebEvidence(
-  message: string,
+async function collectEvidenceFromQueries(
+  queries: string[],
   providerSettings: ProviderSetting[],
-  siteProfiles: SiteProfile[],
 ) {
-  const queries = buildQueries(message, siteProfiles);
   const enabledProviders = providerSettings
     .filter((provider) => provider.enabled)
     .sort((left, right) => left.priority - right.priority);
   const notes: string[] = [];
+  const providerChain: string[] = [];
 
   for (const provider of enabledProviders) {
+    providerChain.push(provider.providerId);
+
     try {
       if (provider.providerId === "tavily") {
         const result = await searchWithTavily(provider, queries);
 
         if (result.evidence.length > 0) {
-          return result;
+          return {
+            ...result,
+            providerChain,
+          };
         }
 
         notes.push(result.notes);
@@ -321,7 +354,10 @@ export async function collectTrainerWebEvidence(
         const result = await searchWithGemini(provider, queries);
 
         if (result.evidence.length > 0) {
-          return result;
+          return {
+            ...result,
+            providerChain,
+          };
         }
 
         notes.push(result.notes);
@@ -338,7 +374,26 @@ export async function collectTrainerWebEvidence(
     notes:
       notes.join(" ") ||
       "No enabled trainer web-search provider returned usable evidence.",
+    providerChain,
     providerId: null,
     queries,
   };
+}
+
+export async function collectTrainerWebEvidence(
+  message: string,
+  providerSettings: ProviderSetting[],
+  siteProfiles: SiteProfile[],
+) {
+  const queries = buildQueries(message, siteProfiles);
+  return collectEvidenceFromQueries(queries, providerSettings);
+}
+
+export async function collectTrainingAuditWebEvidence(
+  rawLyrics: string,
+  providerSettings: ProviderSetting[],
+  siteProfiles: SiteProfile[],
+) {
+  const queries = buildLyricQueries(rawLyrics, siteProfiles);
+  return collectEvidenceFromQueries(queries, providerSettings);
 }

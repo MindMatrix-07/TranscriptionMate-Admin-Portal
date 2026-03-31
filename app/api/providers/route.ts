@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAdminApiAuth } from "@/lib/admin-auth";
 import {
   listProviderSettings,
   upsertProviderSetting,
@@ -11,7 +12,13 @@ export const dynamic = "force-dynamic";
 const supportedProviderIds = new Set(["gemini-search", "tavily"]);
 const providerModes = new Set<ProviderMode>(["always", "low-confidence-only"]);
 
-export async function GET() {
+export async function GET(request: Request) {
+  const unauthorizedResponse = requireAdminApiAuth(request);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
   const providers = await listProviderSettings();
 
   return NextResponse.json({
@@ -21,6 +28,12 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const unauthorizedResponse = requireAdminApiAuth(request);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
   try {
     const body = (await request.json()) as {
       allowFallback?: boolean;

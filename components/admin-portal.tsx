@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import type { TrainingAuditResult } from "@/lib/training-audit";
 import {
   Activity,
   ArrowUpRight,
   BrainCircuit,
   Database,
   LoaderCircle,
+  LogOut,
   MessageSquare,
   MoonStar,
   RefreshCw,
@@ -109,6 +111,10 @@ type TrainerMeta = {
   modelUsed: "gemini" | "openai" | null;
   webEvidenceCount: number;
   webProviderUsed: string | null;
+};
+
+type AdminPortalProps = {
+  authEnabled?: boolean;
 };
 
 const emptySiteForm = {
@@ -305,7 +311,7 @@ function deriveProfileName(domain: string, title: string) {
   return deriveSiteName(domain, "");
 }
 
-export function AdminPortal() {
+export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [sites, setSites] = useState<SiteProfile[]>([]);
@@ -316,10 +322,19 @@ export function AdminPortal() {
   const [auditRuns, setAuditRuns] = useState<AuditRun[]>([]);
   const [siteForm, setSiteForm] = useState(emptySiteForm);
   const [chatInput, setChatInput] = useState("");
+  const [trainingAuditInput, setTrainingAuditInput] = useState("");
+  const [trainingAudit, setTrainingAudit] = useState<TrainingAuditResult | null>(
+    null,
+  );
+  const [trainingAuditError, setTrainingAuditError] = useState<string | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingSite, setIsSavingSite] = useState(false);
   const [isSendingChat, setIsSendingChat] = useState(false);
+  const [isRunningTrainingAudit, setIsRunningTrainingAudit] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [deletingSiteId, setDeletingSiteId] = useState<string | null>(null);
   const [deletingLessonId, setDeletingLessonId] = useState<string | null>(null);
@@ -462,6 +477,82 @@ export function AdminPortal() {
       setChatInput("");
     } finally {
       setIsSendingChat(false);
+    }
+  }
+
+  async function handleTrainingAuditSubmit(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    if (!trainingAuditInput.trim()) {
+      setTrainingAuditError("Paste lyrics before running a training audit.");
+      return;
+    }
+
+    setIsRunningTrainingAudit(true);
+    setTrainingAuditError(null);
+
+    try {
+      const response = await fetch("/api/training-audit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: trainingAuditInput }),
+      });
+      const payload = (await response.json()) as {
+        audit?: TrainingAuditResult;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.audit) {
+        setTrainingAuditError(payload.error ?? "Training audit failed.");
+        return;
+      }
+
+      setTrainingAudit(payload.audit);
+    } finally {
+      setIsRunningTrainingAudit(false);
+    }
+  }
+
+  function handleUseTrainingAuditInChat() {
+    if (!trainingAudit) {
+      return;
+    }
+
+    const topCandidate = trainingAudit.topCandidate;
+    const nextPrompt = [
+      "Turn this audit result into reusable moderation guidance.",
+      `Summary: ${trainingAudit.summary}`,
+      topCandidate
+        ? `Top candidate: ${topCandidate.name} (${topCandidate.domain})`
+        : null,
+      topCandidate
+        ? `Line evidence: ${topCandidate.exactLineMatches} exact, ${topCandidate.nearLineMatches} near, ${topCandidate.longestConsecutiveBlock}-line block, ${topCandidate.matchPercentage}% coverage.`
+        : null,
+      trainingAudit.queries.length > 0
+        ? `Queries used: ${trainingAudit.queries.join(" | ")}`
+        : null,
+      "Write the rule we should store, what weak results to distrust, and what site profile details to save.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    setChatInput(nextPrompt);
+  }
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+      window.location.reload();
+    } finally {
+      setIsLoggingOut(false);
     }
   }
 
@@ -729,12 +820,242 @@ export function AdminPortal() {
                 )}
                 {mounted && theme === "dark" ? "Light mode" : "Dark mode"}
               </button>
+              {authEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  disabled={isLoggingOut}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-rose-400 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLoggingOut ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <LogOut className="size-4" />
+                  )}
+                  {isLoggingOut ? "Signing out..." : "Logout"}
+                </button>
+              ) : null}
             </div>
           </div>
         </header>
 
         <section className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
           <div className="flex flex-col gap-6">
+            <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <Search className="size-4 text-[var(--accent)]" />
+                Training Audit Lab
+              </div>
+              <p className="text-sm leading-6 text-[var(--muted)]">
+                Run the same evidence-based site matching here before you teach the system. This compares fetched candidate pages line by line so your training notes are based on hard evidence.
+              </p>
+
+              <form className="mt-4 grid gap-3" onSubmit={handleTrainingAuditSubmit}>
+                <textarea
+                  value={trainingAuditInput}
+                  onChange={(event) => setTrainingAuditInput(event.target.value)}
+                  placeholder="Paste lyrics here to compare them against the top fetched candidate sites."
+                  className="min-h-[180px] rounded-[24px] border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4 font-mono text-sm leading-7 text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
+                />
+                {trainingAuditError ? (
+                  <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+                    {trainingAuditError}
+                  </div>
+                ) : null}
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="submit"
+                    disabled={isRunningTrainingAudit}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-slate-950 transition hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isRunningTrainingAudit ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <Search className="size-4" />
+                    )}
+                    {isRunningTrainingAudit ? "Auditing..." : "Run Training Audit"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUseTrainingAuditInChat}
+                    disabled={!trainingAudit}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-5 py-3 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <BrainCircuit className="size-4" />
+                    Use Result in Trainer Chat
+                  </button>
+                </div>
+              </form>
+
+              {trainingAudit ? (
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">
+                          {trainingAudit.topCandidate
+                            ? `Best match: ${trainingAudit.topCandidate.name}`
+                            : "No site match yet"}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                          {trainingAudit.summary}
+                        </p>
+                      </div>
+                      {trainingAudit.providerId ? (
+                        <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                          {formatProviderName(trainingAudit.providerId)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
+                      {trainingAudit.notes}
+                    </p>
+                    {trainingAudit.queries.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {trainingAudit.queries.map((query) => (
+                          <span
+                            key={query}
+                            className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]"
+                          >
+                            {query}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {trainingAudit.candidateMatches.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <p className="text-sm font-semibold">Candidate site matches</p>
+                      <div className="mt-3 space-y-3">
+                        {trainingAudit.candidateMatches.map((candidate, index) => (
+                          <a
+                            key={`${candidate.url}-${candidate.domain}-${index}`}
+                            href={candidate.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`block rounded-2xl border px-4 py-4 text-sm transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] ${
+                              index === 0
+                                ? "border-emerald-400/40 bg-emerald-500/10"
+                                : "border-[var(--border)]"
+                            }`}
+                          >
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-semibold">{candidate.name}</p>
+                                  {index === 0 ? (
+                                    <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-[11px] font-medium text-emerald-400">
+                                      Best match
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {candidate.domain}
+                                </p>
+                                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                                  {candidate.title}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                  Score {candidate.score}
+                                </span>
+                                <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                  {candidate.fetched ? "Full page" : "Snippet fallback"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs text-emerald-400">
+                                {candidate.exactLineMatches} exact
+                              </span>
+                              <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs text-amber-400">
+                                {candidate.nearLineMatches} near
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {candidate.matchedLines}/{candidate.inputLineCount} matched
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {candidate.matchPercentage}% coverage
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {candidate.longestConsecutiveBlock}-line block
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {formatProviderName(candidate.providerId)}
+                              </span>
+                            </div>
+
+                            {candidate.sampleMatches.length > 0 ? (
+                              <div className="mt-3 space-y-2">
+                                {candidate.sampleMatches.slice(0, 3).map((match) => (
+                                  <div
+                                    key={`${candidate.url}-${match.inputLine}-${match.candidateLine}`}
+                                    className="rounded-xl border border-[var(--border)] bg-black/10 px-3 py-3"
+                                  >
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                                          match.type === "exact"
+                                            ? "bg-emerald-500/15 text-emerald-400"
+                                            : "bg-amber-500/15 text-amber-400"
+                                        }`}
+                                      >
+                                        {match.type === "exact" ? "Exact" : "Near"}
+                                      </span>
+                                      <span className="text-[11px] text-[var(--muted)]">
+                                        {(match.similarity * 100).toFixed(0)}% similarity
+                                      </span>
+                                    </div>
+                                    <p className="mt-2 font-mono text-xs leading-5 text-[var(--foreground)]">
+                                      Input: {match.inputLine}
+                                    </p>
+                                    {match.type === "near" ? (
+                                      <p className="mt-1 font-mono text-xs leading-5 text-[var(--muted)]">
+                                        Site: {match.candidateLine}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            {candidate.metadataHits.length > 0 ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {candidate.metadataHits.map((item) => (
+                                  <span
+                                    key={`${candidate.url}-${item}`}
+                                    className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--foreground)]"
+                                  >
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            {candidate.nonLyricSignals.length > 0 ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {candidate.nonLyricSignals.map((item) => (
+                                  <span
+                                    key={`${candidate.url}-${item}`}
+                                    className="rounded-full bg-rose-500/15 px-3 py-1 text-xs text-rose-400"
+                                  >
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
             <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <BrainCircuit className="size-4 text-[var(--accent)]" />

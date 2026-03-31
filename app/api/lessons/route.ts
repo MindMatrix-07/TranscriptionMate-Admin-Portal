@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAdminApiAuth } from "@/lib/admin-auth";
 import {
   appendTrainingLesson,
   deleteTrainingLesson,
@@ -8,12 +9,24 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const unauthorizedResponse = requireAdminApiAuth(request);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
   const lessons = await listTrainingLessons();
   return NextResponse.json({ lessons });
 }
 
 export async function POST(request: Request) {
+  const unauthorizedResponse = requireAdminApiAuth(request);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
   try {
     const body = (await request.json()) as {
       confidence?: "low" | "medium" | "high";
@@ -52,6 +65,12 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const unauthorizedResponse = requireAdminApiAuth(request);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
   try {
     const body = (await request.json()) as { id?: string };
 
