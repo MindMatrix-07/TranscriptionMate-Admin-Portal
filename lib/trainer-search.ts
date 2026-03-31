@@ -1,4 +1,7 @@
-import { getSearchableLines } from "@/lib/training-audit";
+import {
+  buildSearchQueryChunks,
+  getSearchableLines,
+} from "@/lib/training-audit";
 import type { ProviderSetting, SiteProfile } from "@/lib/training-store";
 
 export type TrainerWebEvidence = {
@@ -58,26 +61,40 @@ function buildQueries(message: string, siteProfiles: SiteProfile[]) {
 
 function buildLyricQueries(rawLyrics: string, siteProfiles: SiteProfile[]) {
   const lines = getSearchableLines(rawLyrics);
+  const queryChunks = buildSearchQueryChunks(rawLyrics, {
+    maxChunkChars: 110,
+    maxChunks: 3,
+  });
+  const fingerprintQuery = queryChunks.map((chunk) => `"${chunk}"`).join(" ");
   const primaryLine = lines[0];
-  const secondaryLine = lines[1];
   const domains = getMatchingDomains(rawLyrics, siteProfiles).slice(0, 2);
   const queries: string[] = [];
 
-  if (primaryLine && domains[0]) {
-    queries.push(`site:${domains[0]} "${primaryLine}"`);
+  if (fingerprintQuery && domains[0]) {
+    queries.push(`site:${domains[0]} ${fingerprintQuery}`);
   }
 
-  if (primaryLine && secondaryLine) {
-    queries.push(`"${primaryLine}" "${secondaryLine}" lyrics`);
-  } else if (primaryLine) {
-    queries.push(`"${primaryLine}" lyrics`);
+  if (fingerprintQuery && domains[1]) {
+    queries.push(`site:${domains[1]} ${fingerprintQuery}`);
+  }
+
+  if (fingerprintQuery) {
+    queries.push(`${fingerprintQuery} lyrics`);
+  }
+
+  if (primaryLine && domains[0]) {
+    queries.push(`site:${domains[0]} "${primaryLine}"`);
   }
 
   if (primaryLine && domains[1]) {
     queries.push(`site:${domains[1]} "${primaryLine}"`);
   }
 
-  return [...new Set(queries)].filter(Boolean).slice(0, 3);
+  if (primaryLine) {
+    queries.push(`"${primaryLine}" lyrics`);
+  }
+
+  return [...new Set(queries)].filter(Boolean).slice(0, 6);
 }
 
 async function searchWithTavily(
