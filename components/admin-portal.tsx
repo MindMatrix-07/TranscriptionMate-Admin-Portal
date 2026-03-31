@@ -15,6 +15,7 @@ import {
   Settings2,
   ShieldCheck,
   SunMedium,
+  Trash2,
 } from "lucide-react";
 
 type SiteProfile = {
@@ -141,6 +142,8 @@ export function AdminPortal() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingSite, setIsSavingSite] = useState(false);
   const [isSendingChat, setIsSendingChat] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [deletingSiteId, setDeletingSiteId] = useState<string | null>(null);
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -308,6 +311,50 @@ export function AdminPortal() {
     }
   }
 
+  async function handleDeleteNote(id: string) {
+    setDeletingNoteId(id);
+
+    try {
+      const response = await fetch("/api/notes", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Training note delete failed");
+      }
+
+      await refreshAll();
+    } finally {
+      setDeletingNoteId(null);
+    }
+  }
+
+  async function handleDeleteSite(id: string) {
+    setDeletingSiteId(id);
+
+    try {
+      const response = await fetch("/api/sites", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Site delete failed");
+      }
+
+      await refreshAll();
+    } finally {
+      setDeletingSiteId(null);
+    }
+  }
+
   function getProviderStats(providerId: string) {
     const matchingRuns = auditRuns.filter(
       (run) =>
@@ -402,9 +449,24 @@ export function AdminPortal() {
                           : "border border-[var(--border)] bg-black/10 text-[var(--foreground)]"
                       }`}
                     >
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                        {note.author}
-                      </p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                          {note.author}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteNote(note.id)}
+                          disabled={deletingNoteId === note.id}
+                          className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {deletingNoteId === note.id ? (
+                            <LoaderCircle className="size-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5" />
+                          )}
+                          Remove
+                        </button>
+                      </div>
                       <p className="mt-1 whitespace-pre-wrap">{note.content}</p>
                     </div>
                   ))
@@ -722,9 +784,24 @@ export function AdminPortal() {
                           <p className="text-sm font-semibold">{site.name}</p>
                           <p className="text-xs text-[var(--muted)]">{site.domain}</p>
                         </div>
-                        <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--foreground)]">
-                          {site.fingerprints.length} fingerprints
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--foreground)]">
+                            {site.fingerprints.length} fingerprints
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteSite(site.id)}
+                            disabled={deletingSiteId === site.id}
+                            className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {deletingSiteId === site.id ? (
+                              <LoaderCircle className="size-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="size-3.5" />
+                            )}
+                            Remove
+                          </button>
+                        </div>
                       </div>
                       {site.searchHint ? (
                         <p className="mt-3 text-sm text-[var(--muted)]">

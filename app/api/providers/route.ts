@@ -8,7 +8,7 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supportedProviderIds = new Set(["tavily"]);
+const supportedProviderIds = new Set(["gemini-search", "tavily"]);
 const providerModes = new Set<ProviderMode>(["always", "low-confidence-only"]);
 
 export async function GET() {

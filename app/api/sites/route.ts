@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { listSiteProfiles, upsertSiteProfile } from "@/lib/training-store";
+import {
+  deleteSiteProfile,
+  listSiteProfiles,
+  upsertSiteProfile,
+} from "@/lib/training-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +44,27 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json(
       { error: "Failed to save site profile." },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const body = (await request.json()) as { id?: string };
+
+    if (!body.id) {
+      return NextResponse.json(
+        { error: "Site profile id is required." },
+        { status: 400 },
+      );
+    }
+
+    await deleteSiteProfile(body.id);
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json(
+      { error: "Failed to delete site profile." },
       { status: 500 },
     );
   }
