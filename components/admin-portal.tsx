@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Activity,
+  ArrowUpRight,
   BrainCircuit,
   Database,
   LoaderCircle,
@@ -118,6 +119,109 @@ const emptySiteForm = {
   searchHint: "",
 };
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatInlineMarkdown(value: string) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code class="rounded bg-black/20 px-1.5 py-0.5 text-[0.95em]">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+}
+
+function MarkdownContent({
+  className = "",
+  value,
+}: {
+  className?: string;
+  value: string;
+}) {
+  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index]?.trimEnd() ?? "";
+
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line.trim())) {
+      const items: string[] = [];
+
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^\d+\.\s+/, ""));
+        index += 1;
+      }
+
+      blocks.push(
+        <ol key={`ol-${index}`} className="list-decimal space-y-2 pl-5">
+          {items.map((item, itemIndex) => (
+            <li
+              key={`ol-item-${itemIndex}`}
+              dangerouslySetInnerHTML={{ __html: formatInlineMarkdown(item) }}
+            />
+          ))}
+        </ol>,
+      );
+      continue;
+    }
+
+    if (/^[*-]\s+/.test(line.trim())) {
+      const items: string[] = [];
+
+      while (index < lines.length && /^[*-]\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^[*-]\s+/, ""));
+        index += 1;
+      }
+
+      blocks.push(
+        <ul key={`ul-${index}`} className="list-disc space-y-2 pl-5">
+          {items.map((item, itemIndex) => (
+            <li
+              key={`ul-item-${itemIndex}`}
+              dangerouslySetInnerHTML={{ __html: formatInlineMarkdown(item) }}
+            />
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !/^\d+\.\s+/.test(lines[index].trim()) &&
+      !/^[*-]\s+/.test(lines[index].trim())
+    ) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+
+    blocks.push(
+      <p
+        key={`p-${index}`}
+        className="leading-7"
+        dangerouslySetInnerHTML={{
+          __html: paragraphLines.map((item) => formatInlineMarkdown(item)).join("<br />"),
+        }}
+      />,
+    );
+  }
+
+  return <div className={`space-y-4 ${className}`}>{blocks}</div>;
+}
+
 function formatProviderName(value?: string | null) {
   if (!value) {
     return "No provider";
@@ -150,6 +254,57 @@ function getHostname(value: string) {
   }
 }
 
+function extractRelatedDomains(value: string) {
+  return [...new Set(value.match(/\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi) ?? [])].slice(
+    0,
+    5,
+  );
+}
+
+function deriveSiteName(domain: string, title: string) {
+  if (title && title.length <= 60) {
+    return title;
+  }
+
+  const label = domain.replace(/^www\./, "").split(".")[0] ?? domain;
+  return label
+    .split(/[-_]/g)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function buildLessonSearchHint(lesson: TrainingLesson, domain: string) {
+  const source = lesson.sourceMessage.replace(/\s+/g, " ").trim().slice(0, 72);
+  return source ? `site:${domain} "${source}"` : `site:${domain} lyrics`;
+}
+
+function buildLessonTitleFromSource(sourceMessage: string, domains: string[]) {
+  if (domains[0]) {
+    return `Rule for ${domains[0]}`;
+  }
+
+  const compact = sourceMessage.replace(/\s+/g, " ").trim();
+
+  if (!compact) {
+    return "Trainer rule";
+  }
+
+  return compact.length > 72 ? `${compact.slice(0, 69)}...` : compact;
+}
+
+function deriveProfileName(domain: string, title: string) {
+  if (
+    title &&
+    title.length <= 48 &&
+    !/^rule for /i.test(title) &&
+    !/^trainer lesson for /i.test(title)
+  ) {
+    return title;
+  }
+
+  return deriveSiteName(domain, "");
+}
+
 export function AdminPortal() {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
@@ -168,6 +323,8 @@ export function AdminPortal() {
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [deletingSiteId, setDeletingSiteId] = useState<string | null>(null);
   const [deletingLessonId, setDeletingLessonId] = useState<string | null>(null);
+  const [savingLessonRuleId, setSavingLessonRuleId] = useState<string | null>(null);
+  const [applyingLessonId, setApplyingLessonId] = useState<string | null>(null);
   const [trainerMeta, setTrainerMeta] = useState<TrainerMeta | null>(null);
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
 
@@ -414,6 +571,98 @@ export function AdminPortal() {
     }
   }
 
+  async function handleSaveNoteAsLesson(noteId: string) {
+    const noteIndex = notes.findIndex((item) => item.id === noteId);
+    const note = notes[noteIndex];
+
+    if (!note || note.author !== "assistant") {
+      return;
+    }
+
+    const previousAdminNote = [...notes.slice(0, noteIndex)]
+      .reverse()
+      .find((item) => item.author === "admin");
+    const sourceMessage = previousAdminNote?.content.trim() || note.content.trim();
+    const relatedDomains = extractRelatedDomains(`${sourceMessage}\n${note.content}`);
+
+    setSavingLessonRuleId(note.id);
+
+    try {
+      const response = await fetch("/api/lessons", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          confidence: "medium",
+          evidenceSources: [],
+          guidance: note.content.trim(),
+          providerHints: [],
+          relatedDomains,
+          sourceMessage,
+          title: buildLessonTitleFromSource(sourceMessage, relatedDomains),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Training lesson save failed");
+      }
+
+      await refreshAll();
+    } finally {
+      setSavingLessonRuleId(null);
+    }
+  }
+
+  async function handleApplyLessonAsSiteProfile(lesson: TrainingLesson) {
+    const candidateDomains = [
+      ...new Set([
+        ...lesson.relatedDomains,
+        ...lesson.evidenceSources.map((item) => getHostname(item)).filter(Boolean),
+        ...extractRelatedDomains(`${lesson.guidance}\n${lesson.sourceMessage}`),
+      ]),
+    ];
+    const domain = candidateDomains[0];
+
+    if (!domain) {
+      return;
+    }
+
+    const existingSite = sites.find((item) => item.domain === domain);
+    const appendedNotes = [`Lesson: ${lesson.title}`, lesson.guidance]
+      .filter(Boolean)
+      .join("\n\n");
+
+    setApplyingLessonId(lesson.id);
+
+    try {
+      const response = await fetch("/api/sites", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          domain,
+          fingerprints: existingSite?.fingerprints ?? [],
+          id: existingSite?.id,
+          name: existingSite?.name ?? deriveProfileName(domain, lesson.title),
+          notes: existingSite?.notes
+            ? `${existingSite.notes}\n\n${appendedNotes}`
+            : appendedNotes,
+          searchHint: existingSite?.searchHint || buildLessonSearchHint(lesson, domain),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Site profile save failed");
+      }
+
+      await refreshAll();
+    } finally {
+      setApplyingLessonId(null);
+    }
+  }
+
   function getProviderStats(providerId: string) {
     const matchingRuns = auditRuns.filter(
       (run) =>
@@ -512,21 +761,45 @@ export function AdminPortal() {
                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
                           {note.author}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteNote(note.id)}
-                          disabled={deletingNoteId === note.id}
-                          className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {deletingNoteId === note.id ? (
-                            <LoaderCircle className="size-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-3.5" />
-                          )}
-                          Remove
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {note.author === "assistant" ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleSaveNoteAsLesson(note.id)}
+                              disabled={savingLessonRuleId === note.id}
+                              className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {savingLessonRuleId === note.id ? (
+                                <LoaderCircle className="size-3.5 animate-spin" />
+                              ) : (
+                                <BrainCircuit className="size-3.5" />
+                              )}
+                              Save as Lesson Rule
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteNote(note.id)}
+                            disabled={deletingNoteId === note.id}
+                            className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {deletingNoteId === note.id ? (
+                              <LoaderCircle className="size-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="size-3.5" />
+                            )}
+                            Remove
+                          </button>
+                        </div>
                       </div>
-                      <p className="mt-1 whitespace-pre-wrap">{note.content}</p>
+                      {note.author === "assistant" ? (
+                        <MarkdownContent
+                          className="mt-3 text-[var(--foreground)]"
+                          value={note.content}
+                        />
+                      ) : (
+                        <p className="mt-1 whitespace-pre-wrap">{note.content}</p>
+                      )}
                     </div>
                   ))
                 ) : (
@@ -632,6 +905,19 @@ export function AdminPortal() {
                           </span>
                           <button
                             type="button"
+                            onClick={() => void handleApplyLessonAsSiteProfile(lesson)}
+                            disabled={applyingLessonId === lesson.id}
+                            className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {applyingLessonId === lesson.id ? (
+                              <LoaderCircle className="size-3.5 animate-spin" />
+                            ) : (
+                              <Database className="size-3.5" />
+                            )}
+                            Apply as Site Profile
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => void handleDeleteLesson(lesson.id)}
                             disabled={deletingLessonId === lesson.id}
                             className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
@@ -646,9 +932,10 @@ export function AdminPortal() {
                         </div>
                       </div>
 
-                      <p className="mt-3 text-sm leading-6 text-[var(--foreground)]">
-                        {lesson.guidance}
-                      </p>
+                      <MarkdownContent
+                        className="mt-3 text-sm text-[var(--foreground)]"
+                        value={lesson.guidance}
+                      />
                       <p className="mt-3 rounded-2xl border border-[var(--border)] bg-black/10 px-3 py-3 font-mono text-xs leading-5 text-[var(--muted)]">
                         {lesson.sourceMessage}
                       </p>
@@ -671,6 +958,22 @@ export function AdminPortal() {
                           </span>
                         ))}
                       </div>
+                      {lesson.evidenceSources.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {lesson.evidenceSources.slice(0, 4).map((source) => (
+                            <a
+                              key={`${lesson.id}-${source}`}
+                              href={source}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--foreground)]"
+                            >
+                              {getHostname(source)}
+                              <ArrowUpRight className="size-3.5" />
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   ))
                 ) : (
@@ -990,7 +1293,10 @@ export function AdminPortal() {
                         </p>
                       ) : null}
                       {site.notes ? (
-                        <p className="mt-2 text-sm text-[var(--foreground)]">{site.notes}</p>
+                        <MarkdownContent
+                          className="mt-2 text-sm text-[var(--foreground)]"
+                          value={site.notes}
+                        />
                       ) : null}
                     </div>
                   ))
@@ -1076,9 +1382,10 @@ export function AdminPortal() {
                       ) : null}
 
                       {run.notes ? (
-                        <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                          {run.notes}
-                        </p>
+                        <MarkdownContent
+                          className="mt-3 text-sm text-[var(--muted)]"
+                          value={run.notes}
+                        />
                       ) : null}
                     </div>
                   ))
