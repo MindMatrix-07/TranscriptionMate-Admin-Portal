@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { collectTrainerWebEvidence } from "@/lib/trainer-search";
 import {
+  appendTrainingLesson,
   appendTrainingNote,
   listAuditRuns,
   listFeedback,
   listProviderSettings,
   listSiteProfiles,
+  listTrainingLessons,
   listTrainingNotes,
 } from "@/lib/training-store";
 
@@ -22,12 +24,77 @@ const geminiApiBaseUrl =
 const openAiApiUrl = "https://api.openai.com/v1/responses";
 
 type TrainerMeta = {
+  lessonCreated: boolean;
   liveAiEnabled: boolean;
   liveWebEnabled: boolean;
   modelUsed: "gemini" | "openai" | null;
   webEvidenceCount: number;
   webProviderUsed: string | null;
 };
+
+function getConfiguredWebProviders(
+  providers: Awaited<ReturnType<typeof listProviderSettings>>,
+) {
+  return providers.filter((provider) => {
+    if (!provider.enabled) {
+      return false;
+    }
+
+    if (provider.providerId === "tavily") {
+      return Boolean(process.env.TAVILY_API_KEY);
+    }
+
+    if (provider.providerId === "gemini-search") {
+      return Boolean(process.env.GEMINI_API_KEY);
+    }
+
+    return false;
+  });
+}
+
+function extractDomainsFromEvidence(
+  evidence: Array<{ url: string }>,
+  siteProfiles: Array<{ domain: string }>,
+) {
+  const domains = new Set<string>();
+
+  for (const item of evidence) {
+    try {
+      domains.add(new URL(item.url).hostname.replace(/^www\./, ""));
+    } catch {
+      continue;
+    }
+  }
+
+  for (const profile of siteProfiles) {
+    if (domains.has(profile.domain)) {
+      continue;
+    }
+  }
+
+  return [...domains].slice(0, 5);
+}
+
+function buildLessonTitle(message: string, domains: string[]) {
+  if (domains[0]) {
+    return `Trainer lesson for ${domains[0]}`;
+  }
+
+  const compact = message.replace(/\s+/g, " ").trim();
+  return compact.length > 72 ? `${compact.slice(0, 69)}...` : compact;
+}
+
+function buildLessonConfidence(evidenceCount: number) {
+  if (evidenceCount >= 3) {
+    return "high" as const;
+  }
+
+  if (evidenceCount >= 1) {
+    return "medium" as const;
+  }
+
+  return "low" as const;
+}
 
 function extractOpenAiText(payload: unknown) {
   if (
@@ -200,25 +267,28 @@ export async function POST(request: Request) {
       content: message,
     });
 
-    const [siteProfiles, feedback, notes, providers, auditRuns] = await Promise.all([
+    const [siteProfiles, feedback, notes, providers, auditRuns, lessons] = await Promise.all([
       listSiteProfiles(),
       listFeedback(),
       listTrainingNotes(),
       listProviderSettings(),
       listAuditRuns(),
+      listTrainingLessons(),
     ]);
     const liveAiEnabled = Boolean(
       process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY,
     );
+    const configuredWebProviders = getConfiguredWebProviders(providers);
     const trainerWebSearch = await collectTrainerWebEvidence(
       message,
       providers,
       siteProfiles,
     );
-    const liveWebEnabled = trainerWebSearch.queries.length > 0;
+    const liveWebEnabled = configuredWebProviders.length > 0;
     const promptPayload = {
       auditRuns: auditRuns.slice(0, 25),
       feedback: feedback.slice(0, 20),
+      lessons: lessons.slice(0, 25),
       message,
       notes: notes.slice(-20),
       providers,
@@ -228,11 +298,13 @@ export async function POST(request: Request) {
       trainerWebQueries: trainerWebSearch.queries,
     };
     const meta: TrainerMeta = {
+      lessonCreated: false,
       liveAiEnabled,
       liveWebEnabled,
       modelUsed: null,
       webEvidenceCount: trainerWebSearch.evidence.length,
-      webProviderUsed: trainerWebSearch.providerId,
+      webProviderUsed:
+        trainerWebSearch.providerId ?? configuredWebProviders[0]?.providerId ?? null,
     };
 
     let reply =
@@ -271,9 +343,31 @@ export async function POST(request: Request) {
       content: reply,
     });
 
+    if (liveAiEnabled && liveWebEnabled && reply) {
+      const relatedDomains = extractDomainsFromEvidence(
+        trainerWebSearch.evidence,
+        siteProfiles,
+      );
+      const lesson = await appendTrainingLesson({
+        confidence: buildLessonConfidence(trainerWebSearch.evidence.length),
+        evidenceSources: trainerWebSearch.evidence.map((item) => item.url).slice(0, 5),
+        guidance: reply,
+        providerHints: trainerWebSearch.providerId ? [trainerWebSearch.providerId] : [],
+        relatedDomains,
+        sourceMessage: message,
+        title: buildLessonTitle(message, relatedDomains),
+      });
+
+      if (lesson.id) {
+        meta.lessonCreated = true;
+      }
+    }
+
     const updatedNotes = await listTrainingNotes();
+    const updatedLessons = await listTrainingLessons();
 
     return NextResponse.json({
+      lessons: updatedLessons,
       meta,
       notes: updatedNotes,
       reply,

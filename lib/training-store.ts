@@ -17,6 +17,17 @@ export type TrainingNote = SharedItem & {
   content: string;
 };
 
+export type TrainingLesson = SharedItem & {
+  confidence: "low" | "medium" | "high";
+  evidenceSources: string[];
+  guidance: string;
+  providerHints: string[];
+  relatedDomains: string[];
+  sourceMessage: string;
+  title: string;
+  updatedAt: string;
+};
+
 export type AuditFeedback = SharedItem & {
   auditRunId?: string | null;
   auditSummary: string;
@@ -67,6 +78,7 @@ const sharedMemoryStore = new Map<string, string>();
 const storageKeys = {
   auditRuns: "trainer:audit-runs",
   feedback: "trainer:feedback",
+  lessons: "trainer:lessons",
   providers: "trainer:providers",
   siteProfiles: "trainer:site-profiles",
   trainingNotes: "trainer:notes",
@@ -215,6 +227,10 @@ export async function listTrainingNotes() {
   return readList<TrainingNote>(storageKeys.trainingNotes);
 }
 
+export async function listTrainingLessons() {
+  return readList<TrainingLesson>(storageKeys.lessons);
+}
+
 export async function appendTrainingNote(
   note: Omit<TrainingNote, "createdAt" | "id">,
 ) {
@@ -234,6 +250,29 @@ export async function deleteTrainingNote(id: string) {
   const items = await listTrainingNotes();
   const nextItems = items.filter((item) => item.id !== id);
   await writeList(storageKeys.trainingNotes, nextItems);
+}
+
+export async function appendTrainingLesson(
+  lesson: Omit<TrainingLesson, "createdAt" | "id" | "updatedAt">,
+) {
+  const items = await listTrainingLessons();
+  const now = new Date().toISOString();
+  const nextLesson = {
+    ...lesson,
+    createdAt: now,
+    id: createId("lesson"),
+    updatedAt: now,
+  } satisfies TrainingLesson;
+
+  const nextItems = [nextLesson, ...items].slice(0, 100);
+  await writeList(storageKeys.lessons, nextItems);
+  return nextLesson;
+}
+
+export async function deleteTrainingLesson(id: string) {
+  const items = await listTrainingLessons();
+  const nextItems = items.filter((item) => item.id !== id);
+  await writeList(storageKeys.lessons, nextItems);
 }
 
 export async function listFeedback() {

@@ -36,6 +36,19 @@ type TrainingNote = {
   id: string;
 };
 
+type TrainingLesson = {
+  confidence: "low" | "medium" | "high";
+  createdAt: string;
+  evidenceSources: string[];
+  guidance: string;
+  id: string;
+  providerHints: string[];
+  relatedDomains: string[];
+  sourceMessage: string;
+  title: string;
+  updatedAt: string;
+};
+
 type AuditFeedback = {
   auditSummary: string;
   createdAt: string;
@@ -89,6 +102,7 @@ type AuditRun = {
 type Theme = "light" | "dark";
 
 type TrainerMeta = {
+  lessonCreated: boolean;
   liveAiEnabled: boolean;
   liveWebEnabled: boolean;
   modelUsed: "gemini" | "openai" | null;
@@ -140,6 +154,7 @@ export function AdminPortal() {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [sites, setSites] = useState<SiteProfile[]>([]);
+  const [lessons, setLessons] = useState<TrainingLesson[]>([]);
   const [notes, setNotes] = useState<TrainingNote[]>([]);
   const [feedback, setFeedback] = useState<AuditFeedback[]>([]);
   const [providers, setProviders] = useState<ProviderSetting[]>([]);
@@ -152,6 +167,7 @@ export function AdminPortal() {
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [deletingSiteId, setDeletingSiteId] = useState<string | null>(null);
+  const [deletingLessonId, setDeletingLessonId] = useState<string | null>(null);
   const [trainerMeta, setTrainerMeta] = useState<TrainerMeta | null>(null);
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
 
@@ -182,12 +198,14 @@ export function AdminPortal() {
     try {
       const [
         sitesResponse,
+        lessonsResponse,
         notesResponse,
         feedbackResponse,
         providersResponse,
         auditRunsResponse,
       ] = await Promise.all([
         fetch("/api/sites"),
+        fetch("/api/lessons"),
         fetch("/api/notes"),
         fetch("/api/feedback"),
         fetch("/api/providers"),
@@ -195,6 +213,9 @@ export function AdminPortal() {
       ]);
 
       const sitesPayload = (await sitesResponse.json()) as { sites: SiteProfile[] };
+      const lessonsPayload = (await lessonsResponse.json()) as {
+        lessons: TrainingLesson[];
+      };
       const notesPayload = (await notesResponse.json()) as { notes: TrainingNote[] };
       const feedbackPayload = (await feedbackResponse.json()) as {
         feedback: AuditFeedback[];
@@ -207,6 +228,7 @@ export function AdminPortal() {
       };
 
       setSites(sitesPayload.sites ?? []);
+      setLessons(lessonsPayload.lessons ?? []);
       setNotes(notesPayload.notes ?? []);
       setFeedback(feedbackPayload.feedback ?? []);
       setProviders(providersPayload.providers ?? []);
@@ -273,9 +295,11 @@ export function AdminPortal() {
       }
 
       const payload = (await response.json()) as {
+        lessons?: TrainingLesson[];
         meta?: TrainerMeta;
         notes: TrainingNote[];
       };
+      setLessons(payload.lessons ?? []);
       setNotes(payload.notes ?? []);
       setTrainerMeta(payload.meta ?? null);
       setChatInput("");
@@ -365,6 +389,28 @@ export function AdminPortal() {
       await refreshAll();
     } finally {
       setDeletingSiteId(null);
+    }
+  }
+
+  async function handleDeleteLesson(id: string) {
+    setDeletingLessonId(id);
+
+    try {
+      const response = await fetch("/api/lessons", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Training lesson delete failed");
+      }
+
+      await refreshAll();
+    } finally {
+      setDeletingLessonId(null);
     }
   }
 
@@ -536,9 +582,103 @@ export function AdminPortal() {
                           )} (${trainerMeta.webEvidenceCount})`
                         : "Web: missing"}
                     </span>
+                    <span
+                      className={`rounded-full px-3 py-1 ${
+                        trainerMeta.lessonCreated
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-[var(--accent-soft)] text-[var(--foreground)]"
+                      }`}
+                    >
+                      {trainerMeta.lessonCreated
+                        ? "Structured lesson saved"
+                        : "No lesson saved"}
+                    </span>
                   </div>
                 ) : null}
               </form>
+            </div>
+
+            <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <BrainCircuit className="size-4 text-[var(--accent)]" />
+                Structured Lessons
+              </div>
+
+              <div className="space-y-3">
+                {lessons.length > 0 ? (
+                  lessons.slice(0, 12).map((lesson) => (
+                    <div
+                      key={lesson.id}
+                      className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold">{lesson.title}</p>
+                          <p className="text-xs text-[var(--muted)]">
+                            {formatTime(lesson.updatedAt)}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs ${
+                              lesson.confidence === "high"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : lesson.confidence === "medium"
+                                  ? "bg-amber-500/15 text-amber-400"
+                                  : "bg-[var(--accent-soft)] text-[var(--foreground)]"
+                            }`}
+                          >
+                            {lesson.confidence} confidence
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteLesson(lesson.id)}
+                            disabled={deletingLessonId === lesson.id}
+                            className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {deletingLessonId === lesson.id ? (
+                              <LoaderCircle className="size-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="size-3.5" />
+                            )}
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="mt-3 text-sm leading-6 text-[var(--foreground)]">
+                        {lesson.guidance}
+                      </p>
+                      <p className="mt-3 rounded-2xl border border-[var(--border)] bg-black/10 px-3 py-3 font-mono text-xs leading-5 text-[var(--muted)]">
+                        {lesson.sourceMessage}
+                      </p>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {lesson.relatedDomains.map((domain) => (
+                          <span
+                            key={`${lesson.id}-${domain}`}
+                            className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]"
+                          >
+                            {domain}
+                          </span>
+                        ))}
+                        {lesson.providerHints.map((providerId) => (
+                          <span
+                            key={`${lesson.id}-${providerId}`}
+                            className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]"
+                          >
+                            {formatProviderName(providerId)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-6 text-sm text-[var(--muted)]">
+                    Structured lessons created from trainer chat will appear here.
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
