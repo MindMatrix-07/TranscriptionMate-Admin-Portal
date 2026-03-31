@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import { requireAdminApiAuth } from "@/lib/admin-auth";
 import {
+  detectLyricLanguage,
+  languageMatchesSource,
+} from "@/lib/lyric-language";
+import {
   compareLyricsAgainstWebEvidence,
   summarizeTrainingAuditMatches,
 } from "@/lib/training-audit-line-matcher";
 import type { TrainingAuditResult } from "@/lib/training-audit";
 import { collectTrainingAuditWebEvidence } from "@/lib/trainer-search";
 import {
+  listAuditSources,
   listProviderSettings,
   listSiteProfiles,
 } from "@/lib/training-store";
@@ -43,14 +48,22 @@ export async function POST(request: Request) {
       );
     }
 
-    const [providerSettings, siteProfiles] = await Promise.all([
+    const [providerSettings, siteProfiles, auditSources] = await Promise.all([
       listProviderSettings(),
       listSiteProfiles(),
+      listAuditSources(),
     ]);
+    const detectedLanguage = detectLyricLanguage(text);
+    const languageSources = auditSources.filter(
+      (source) =>
+        source.enabled && languageMatchesSource(detectedLanguage, source.language),
+    );
     const webSearch = await collectTrainingAuditWebEvidence(
       text,
       providerSettings,
       siteProfiles,
+      auditSources,
+      detectedLanguage,
     );
     const candidateMatches = await compareLyricsAgainstWebEvidence(
       text,
@@ -61,7 +74,17 @@ export async function POST(request: Request) {
 
     const audit = {
       candidateMatches,
-      notes: [summary.summary, webSearch.notes].filter(Boolean).join(" "),
+      configuredSourceCount: languageSources.length,
+      configuredSourceDomains: languageSources.map((source) => source.domain),
+      detectedLanguage,
+      notes: [
+        `Detected lyric language: ${detectedLanguage}.`,
+        `Configured pages to analyze for this language: ${languageSources.length}.`,
+        summary.summary,
+        webSearch.notes,
+      ]
+        .filter(Boolean)
+        .join(" "),
       providerChain: webSearch.providerChain,
       providerId: webSearch.providerId,
       queries: webSearch.queries,

@@ -1,8 +1,16 @@
 import {
+  languageMatchesSource,
+  type LyricLanguage,
+} from "@/lib/lyric-language";
+import {
   buildSearchQueryChunks,
   getSearchableLines,
 } from "@/lib/training-audit";
-import type { ProviderSetting, SiteProfile } from "@/lib/training-store";
+import type {
+  AuditSource,
+  ProviderSetting,
+  SiteProfile,
+} from "@/lib/training-store";
 
 export type TrainerWebEvidence = {
   providerId: string;
@@ -59,7 +67,44 @@ function buildQueries(message: string, siteProfiles: SiteProfile[]) {
   return [...new Set(queries)].filter(Boolean).slice(0, 3);
 }
 
-function buildLyricQueries(rawLyrics: string, siteProfiles: SiteProfile[]) {
+function getLyricMatchingDomains(
+  rawLyrics: string,
+  siteProfiles: SiteProfile[],
+  auditSources: AuditSource[],
+  detectedLanguage: LyricLanguage,
+) {
+  const lowered = rawLyrics.toLowerCase();
+  const sourceDomains = auditSources
+    .filter(
+      (source) =>
+        source.enabled && languageMatchesSource(detectedLanguage, source.language),
+    )
+    .map((source) => source.domain);
+  const profileMatches = siteProfiles
+    .filter((profile) => {
+      if (lowered.includes(profile.domain.toLowerCase())) {
+        return true;
+      }
+
+      if (lowered.includes(profile.name.toLowerCase())) {
+        return true;
+      }
+
+      return profile.fingerprints.some((fingerprint) =>
+        lowered.includes(fingerprint.toLowerCase()),
+      );
+    })
+    .map((profile) => profile.domain);
+
+  return [...new Set([...sourceDomains, ...profileMatches])];
+}
+
+function buildLanguageAwareLyricQueries(
+  rawLyrics: string,
+  siteProfiles: SiteProfile[],
+  auditSources: AuditSource[],
+  detectedLanguage: LyricLanguage,
+) {
   const lines = getSearchableLines(rawLyrics);
   const queryChunks = buildSearchQueryChunks(rawLyrics, {
     maxChunkChars: 110,
@@ -67,34 +112,35 @@ function buildLyricQueries(rawLyrics: string, siteProfiles: SiteProfile[]) {
   });
   const fingerprintQuery = queryChunks.map((chunk) => `"${chunk}"`).join(" ");
   const primaryLine = lines[0];
-  const domains = getMatchingDomains(rawLyrics, siteProfiles).slice(0, 2);
+  const domains = getLyricMatchingDomains(
+    rawLyrics,
+    siteProfiles,
+    auditSources,
+    detectedLanguage,
+  );
   const queries: string[] = [];
 
-  if (fingerprintQuery && domains[0]) {
-    queries.push(`site:${domains[0]} ${fingerprintQuery}`);
-  }
-
-  if (fingerprintQuery && domains[1]) {
-    queries.push(`site:${domains[1]} ${fingerprintQuery}`);
+  for (const domain of domains) {
+    if (fingerprintQuery) {
+      queries.push(`site:${domain} ${fingerprintQuery}`);
+    }
   }
 
   if (fingerprintQuery) {
     queries.push(`${fingerprintQuery} lyrics`);
   }
 
-  if (primaryLine && domains[0]) {
-    queries.push(`site:${domains[0]} "${primaryLine}"`);
-  }
-
-  if (primaryLine && domains[1]) {
-    queries.push(`site:${domains[1]} "${primaryLine}"`);
+  for (const domain of domains) {
+    if (primaryLine) {
+      queries.push(`site:${domain} "${primaryLine}"`);
+    }
   }
 
   if (primaryLine) {
     queries.push(`"${primaryLine}" lyrics`);
   }
 
-  return [...new Set(queries)].filter(Boolean).slice(0, 6);
+  return [...new Set(queries)].filter(Boolean);
 }
 
 async function searchWithTavily(
@@ -109,6 +155,7 @@ async function searchWithTavily(
 
   const attemptedQueries: string[] = [];
   const evidence: TrainerWebEvidence[] = [];
+  const seenUrls = new Set<string>();
 
   for (const query of queries) {
     attemptedQueries.push(query);
@@ -149,17 +196,21 @@ async function searchWithTavily(
         snippet: result.content ?? "",
         title: result.title ?? "Untitled result",
         url: result.url ?? "",
-      }));
+      }))
+      .filter((result) => {
+        if (seenUrls.has(result.url)) {
+          return false;
+        }
+
+        seenUrls.add(result.url);
+        return true;
+      });
 
     evidence.push(...nextEvidence);
-
-    if (nextEvidence.length > 0) {
-      break;
-    }
   }
 
   return {
-    evidence: evidence.slice(0, 5),
+    evidence: evidence.slice(0, 10),
     notes:
       evidence.length > 0
         ? `Tavily returned ${evidence.length} result${evidence.length === 1 ? "" : "s"} for the trainer prompt.`
@@ -410,7 +461,14 @@ export async function collectTrainingAuditWebEvidence(
   rawLyrics: string,
   providerSettings: ProviderSetting[],
   siteProfiles: SiteProfile[],
+  auditSources: AuditSource[],
+  detectedLanguage: LyricLanguage,
 ) {
-  const queries = buildLyricQueries(rawLyrics, siteProfiles);
+  const queries = buildLanguageAwareLyricQueries(
+    rawLyrics,
+    siteProfiles,
+    auditSources,
+    detectedLanguage,
+  );
   return collectEvidenceFromQueries(queries, providerSettings);
 }

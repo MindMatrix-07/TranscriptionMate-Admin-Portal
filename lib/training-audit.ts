@@ -1,3 +1,5 @@
+import type { LyricLanguage } from "@/lib/lyric-language";
+
 export type TrainingAuditWebEvidence = {
   providerId: string;
   score?: number | null;
@@ -35,6 +37,9 @@ export type TrainingAuditCandidateMatch = {
 
 export type TrainingAuditResult = {
   candidateMatches: TrainingAuditCandidateMatch[];
+  configuredSourceCount: number;
+  configuredSourceDomains: string[];
+  detectedLanguage: LyricLanguage;
   notes: string;
   providerChain: string[];
   providerId: string | null;

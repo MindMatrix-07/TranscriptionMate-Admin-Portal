@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import {
+  supportedLyricLanguages,
+  type LyricLanguage,
+} from "@/lib/lyric-language";
 import type { TrainingAuditResult } from "@/lib/training-audit";
 import {
   Activity,
@@ -29,6 +33,18 @@ type SiteProfile = {
   name: string;
   notes: string;
   searchHint: string;
+  updatedAt: string;
+};
+
+type AuditSource = {
+  createdAt: string;
+  domain: string;
+  enabled: boolean;
+  id: string;
+  language: LyricLanguage;
+  name: string;
+  notes: string;
+  origin: "feedback" | "manual";
   updatedAt: string;
 };
 
@@ -123,6 +139,14 @@ const emptySiteForm = {
   name: "",
   notes: "",
   searchHint: "",
+};
+
+const emptyAuditSourceForm = {
+  domain: "",
+  enabled: true,
+  language: "english" as LyricLanguage,
+  name: "",
+  notes: "",
 };
 
 function escapeHtml(value: string) {
@@ -239,6 +263,17 @@ function formatProviderName(value?: string | null) {
     .join(" ");
 }
 
+function formatLanguageLabel(value: LyricLanguage) {
+  if (value === "unknown") {
+    return "Any language";
+  }
+
+  return value
+    .split("-")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
 function formatTime(value: string) {
   const date = new Date(value);
 
@@ -315,12 +350,14 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [sites, setSites] = useState<SiteProfile[]>([]);
+  const [auditSources, setAuditSources] = useState<AuditSource[]>([]);
   const [lessons, setLessons] = useState<TrainingLesson[]>([]);
   const [notes, setNotes] = useState<TrainingNote[]>([]);
   const [feedback, setFeedback] = useState<AuditFeedback[]>([]);
   const [providers, setProviders] = useState<ProviderSetting[]>([]);
   const [auditRuns, setAuditRuns] = useState<AuditRun[]>([]);
   const [siteForm, setSiteForm] = useState(emptySiteForm);
+  const [auditSourceForm, setAuditSourceForm] = useState(emptyAuditSourceForm);
   const [chatInput, setChatInput] = useState("");
   const [trainingAuditInput, setTrainingAuditInput] = useState("");
   const [trainingAudit, setTrainingAudit] = useState<TrainingAuditResult | null>(
@@ -332,11 +369,15 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingSite, setIsSavingSite] = useState(false);
+  const [isSavingAuditSource, setIsSavingAuditSource] = useState(false);
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [isRunningTrainingAudit, setIsRunningTrainingAudit] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [deletingSiteId, setDeletingSiteId] = useState<string | null>(null);
+  const [deletingAuditSourceId, setDeletingAuditSourceId] = useState<string | null>(
+    null,
+  );
   const [deletingLessonId, setDeletingLessonId] = useState<string | null>(null);
   const [savingLessonRuleId, setSavingLessonRuleId] = useState<string | null>(null);
   const [applyingLessonId, setApplyingLessonId] = useState<string | null>(null);
@@ -370,6 +411,7 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
     try {
       const [
         sitesResponse,
+        auditSourcesResponse,
         lessonsResponse,
         notesResponse,
         feedbackResponse,
@@ -377,6 +419,7 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
         auditRunsResponse,
       ] = await Promise.all([
         fetch("/api/sites"),
+        fetch("/api/audit-sources"),
         fetch("/api/lessons"),
         fetch("/api/notes"),
         fetch("/api/feedback"),
@@ -385,6 +428,9 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
       ]);
 
       const sitesPayload = (await sitesResponse.json()) as { sites: SiteProfile[] };
+      const auditSourcesPayload = (await auditSourcesResponse.json()) as {
+        sources: AuditSource[];
+      };
       const lessonsPayload = (await lessonsResponse.json()) as {
         lessons: TrainingLesson[];
       };
@@ -400,6 +446,7 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
       };
 
       setSites(sitesPayload.sites ?? []);
+      setAuditSources(auditSourcesPayload.sources ?? []);
       setLessons(lessonsPayload.lessons ?? []);
       setNotes(notesPayload.notes ?? []);
       setFeedback(feedbackPayload.feedback ?? []);
@@ -441,6 +488,30 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
       await refreshAll();
     } finally {
       setIsSavingSite(false);
+    }
+  }
+
+  async function handleAuditSourceSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingAuditSource(true);
+
+    try {
+      const response = await fetch("/api/audit-sources", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(auditSourceForm),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to save analysis source");
+      }
+
+      setAuditSourceForm(emptyAuditSourceForm);
+      await refreshAll();
+    } finally {
+      setIsSavingAuditSource(false);
     }
   }
 
@@ -526,6 +597,10 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
     const nextPrompt = [
       "Turn this audit result into reusable moderation guidance.",
       `Summary: ${trainingAudit.summary}`,
+      `Detected language: ${formatLanguageLabel(trainingAudit.detectedLanguage)}`,
+      trainingAudit.configuredSourceDomains.length > 0
+        ? `Configured pages checked: ${trainingAudit.configuredSourceDomains.join(", ")}`
+        : "Configured pages checked: none",
       topCandidate
         ? `Top candidate: ${topCandidate.name} (${topCandidate.domain})`
         : null,
@@ -637,6 +712,28 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
       await refreshAll();
     } finally {
       setDeletingSiteId(null);
+    }
+  }
+
+  async function handleDeleteAuditSource(id: string) {
+    setDeletingAuditSourceId(id);
+
+    try {
+      const response = await fetch("/api/audit-sources", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Analysis source delete failed");
+      }
+
+      await refreshAll();
+    } finally {
+      setDeletingAuditSourceId(null);
     }
   }
 
@@ -910,6 +1007,26 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
                     <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
                       {trainingAudit.notes}
                     </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                        Language: {formatLanguageLabel(trainingAudit.detectedLanguage)}
+                      </span>
+                      <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                        {trainingAudit.configuredSourceCount} pages queued
+                      </span>
+                    </div>
+                    {trainingAudit.configuredSourceDomains.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {trainingAudit.configuredSourceDomains.map((domain) => (
+                          <span
+                            key={`audit-source-${domain}`}
+                            className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--foreground)]"
+                          >
+                            {domain}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     {trainingAudit.queries.length > 0 ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {trainingAudit.queries.map((query) => (
@@ -1496,6 +1613,156 @@ export function AdminPortal({ authEnabled = false }: AdminPortalProps) {
                 ) : (
                   <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-6 text-sm text-[var(--muted)]">
                     No providers have been configured yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <Route className="size-4 text-[var(--accent)]" />
+                Pages to Analyse by AI
+              </div>
+              <p className="mb-4 text-sm leading-6 text-[var(--muted)]">
+                Add language-specific source domains here so every lyrics audit can
+                cross-check them one by one. Confirmed sources from the main app
+                are added here automatically after positive feedback.
+              </p>
+
+              <form className="grid gap-3" onSubmit={handleAuditSourceSubmit}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <input
+                    value={auditSourceForm.name}
+                    onChange={(event) =>
+                      setAuditSourceForm((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                    placeholder="Source label"
+                    className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
+                  />
+                  <input
+                    value={auditSourceForm.domain}
+                    onChange={(event) =>
+                      setAuditSourceForm((current) => ({
+                        ...current,
+                        domain: event.target.value,
+                      }))
+                    }
+                    placeholder="Domain to cross-check"
+                    className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <select
+                    value={auditSourceForm.language}
+                    onChange={(event) =>
+                      setAuditSourceForm((current) => ({
+                        ...current,
+                        language: event.target.value as LyricLanguage,
+                      }))
+                    }
+                    className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
+                  >
+                    {supportedLyricLanguages.map((language) => (
+                      <option key={language} value={language}>
+                        {formatLanguageLabel(language)}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={auditSourceForm.enabled}
+                      onChange={(event) =>
+                        setAuditSourceForm((current) => ({
+                          ...current,
+                          enabled: event.target.checked,
+                        }))
+                      }
+                    />
+                    Enabled
+                  </label>
+                </div>
+                <textarea
+                  value={auditSourceForm.notes}
+                  onChange={(event) =>
+                    setAuditSourceForm((current) => ({
+                      ...current,
+                      notes: event.target.value,
+                    }))
+                  }
+                  placeholder="Why this source matters for audits under the selected language"
+                  className="min-h-[110px] rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
+                />
+                <button
+                  type="submit"
+                  disabled={isSavingAuditSource}
+                  className="inline-flex items-center justify-center gap-2 self-start rounded-2xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-slate-950 transition hover:-translate-y-0.5 hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSavingAuditSource ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Route className="size-4" />
+                  )}
+                  {isSavingAuditSource ? "Saving..." : "Add Analysis Source"}
+                </button>
+              </form>
+
+              <div className="mt-4 space-y-3">
+                {auditSources.length > 0 ? (
+                  auditSources.map((source) => (
+                    <div
+                      key={source.id}
+                      className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold">{source.name}</p>
+                            <span className="rounded-full border border-[var(--border)] px-3 py-1 text-[11px] text-[var(--muted)]">
+                              {formatLanguageLabel(source.language)}
+                            </span>
+                            <span
+                              className={`rounded-full px-3 py-1 text-[11px] ${
+                                source.enabled
+                                  ? "bg-emerald-500/15 text-emerald-400"
+                                  : "bg-rose-500/15 text-rose-400"
+                              }`}
+                            >
+                              {source.enabled ? "Enabled" : "Disabled"}
+                            </span>
+                            <span className="rounded-full border border-[var(--border)] px-3 py-1 text-[11px] text-[var(--muted)]">
+                              {source.origin === "feedback" ? "From feedback" : "Manual"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-[var(--muted)]">{source.domain}</p>
+                          {source.notes ? (
+                            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                              {source.notes}
+                            </p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteAuditSource(source.id)}
+                          disabled={deletingAuditSourceId === source.id}
+                          className="inline-flex items-center gap-2 self-start rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)] transition hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {deletingAuditSourceId === source.id ? (
+                            <LoaderCircle className="size-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5" />
+                          )}
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-6 text-sm text-[var(--muted)]">
+                    No language-specific analysis pages have been added yet.
                   </div>
                 )}
               </div>
